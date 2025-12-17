@@ -2,6 +2,7 @@
 #include "Qylon.h"
 #include "Camera.h"
 #include "CameraWidget.h"
+#include <algorithm>
 
 #ifdef PCL_ENABLED
 #include <pcl/point_cloud.h>
@@ -35,7 +36,6 @@ Qylon::Camera::Camera(Qylon *parentQylon) : parent(parentQylon){
             }
         }else stopGrab();
     });
-
     widget = new CameraWidget(this);
     connect(this, &Camera::grabbingState, widget, &CameraWidget::grabbingState);
     connect(this, &Camera::connectionStatus, widget, [=](QString camera, bool on){
@@ -66,16 +66,17 @@ const void *Qylon::Camera::getBuffer() const
 /// It will return True or False depending on the result.
 bool Qylon::Camera::openCamera(QString cameraName){
     QMutexLocker lock(&memberLock);
-
     try{
         auto idx = parent->getCameraIndexfromName(cameraName);
         // if(!idx.IsDeviceFactoryAvailable()) return false;
+
         if(Pylon::CDeviceInfo() == idx) return false;
         Pylon::IPylonDevice* pDevice = Pylon::CTlFactory::GetInstance().CreateDevice(idx);
         currentInstantCamera.Attach(pDevice, Pylon::Cleanup_Delete);
         currentInstantCamera.Open();
 
-        if(QString(currentInstantCamera.GetDeviceInfo().GetModelName()).contains("blaze")){
+        QString modelName = pDevice->GetDeviceInfo().GetModelName().c_str();
+        if(modelName.contains("blaze")){
             //Enable streaming in GenDC format
             auto &nodemap = currentInstantCamera.GetNodeMap();
             auto genDCStreamingMode = Pylon::CEnumParameter(nodemap, "GenDCStreamingMode");
@@ -105,6 +106,30 @@ bool Qylon::Camera::openCamera(QString cameraName){
                 currentInstantCamera.Scan3dInvalidDataValue.SetValue(std::numeric_limits<float>::quiet_NaN());
             }
         }
+
+        if(modelName.contains("STA")){
+            // Stereo Ace Series
+            auto &nodemap = currentInstantCamera.GetNodeMap();
+            auto componentSelector = Pylon::CEnumParameter(nodemap, "ComponentSelector");
+            auto componentEnable = Pylon::CBooleanParameter(nodemap, "ComponentEnable");
+            auto pixelFormat = Pylon::CEnumParameter(nodemap, "PixelFormat");
+
+            componentSelector.FromString("Intensity");
+            componentEnable.SetValue(true);
+            Pylon::StringList_t values;
+            pixelFormat.GetSettableValues(values);
+            for(auto value: values){
+                qDebug() << value;
+            }
+            pixelFormat.TrySetValue("RGB8");
+
+            componentSelector.FromString("Disparity");
+            componentEnable.SetValue(true);
+
+            auto BslIlluminationMode = Pylon::CEnumParameter(nodemap, "BslIlluminationMode");
+            BslIlluminationMode.FromString("AlternateActive");
+        }
+
         getQylon()->updateCameraList();
         return true;
     }catch (const Pylon::GenericException &e){
@@ -132,7 +157,6 @@ void Qylon::Camera::closeCamera(){
     }
     catch(const Pylon::GenericException &e){ Qylon::log(QString::fromStdString(e.GetDescription()));}
     catch(QString e){ Qylon::log(e);}
-
 }
 
 void Qylon::Camera::singleGrab()
@@ -262,8 +286,9 @@ void Qylon::Camera::OnImageGrabbed(Pylon::CInstantCamera &camera, const Pylon::C
     try{
         if (!(grabResult.IsValid() && grabResult->GrabSucceeded())) return;
 
+        QString model = camera.GetDeviceInfo().GetModelName().c_str();
         // Only process images if the camera is "blaze"
-        if (QString(camera.GetDeviceInfo().GetModelName().c_str()).contains("blaze")) {
+        if (model.contains("blaze")) {
 #ifdef PCL_ENABLED
             try {
                 auto container = grabResult->GetDataContainer();
@@ -303,7 +328,14 @@ void Qylon::Camera::OnImageGrabbed(Pylon::CInstantCamera &camera, const Pylon::C
                 Qylon::log("[ERROR WHILE MAKING GRABBED IMAGE]");
             }
 #endif
-        } else {  // Handle non-blaze cameras
+        }else if(model.contains("STA")){
+            try{
+                pcPtr = convertGrabResultToPointCloud(grabResult);
+                emit grabbedPointCloud();
+            }catch(const Pylon::GenericException &e){
+                Qylon::log("[ERROR WHILE MAKING GRABBED IMAGE]");
+            }
+        }else {  // Handle 2D cameras
             try {
                 Pylon::CPylonImage image;
                 image.AttachGrabResultBuffer(grabResult);
@@ -402,33 +434,110 @@ struct Point{
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr Qylon::Camera::convertGrabResultToPointCloud(const Pylon::CGrabResultPtr& grabResult)
 {
     const auto container = grabResult->GetDataContainer();
-    const auto rangeComponent = container.GetDataComponent(0);
-    const auto intensityComponent = container.GetDataComponent(1);
+    int intensity_comp = -1;
+    int disparity_comp = -1;
+    int range_comp = -1;
 
-    const uint32_t width = rangeComponent.GetWidth();
-    const uint32_t height = rangeComponent.GetHeight();
-
+    for(int i=0; i< container.GetDataComponentCount(); ++i){
+        switch(container.GetDataComponent(i).GetComponentType()){
+        case Pylon::ComponentType_Intensity:
+            intensity_comp = i;
+            break;
+        case Pylon::ComponentType_Range:
+            range_comp = i;
+            break;
+        case Pylon::ComponentType_Disparity:
+            disparity_comp = i;
+            break;
+        case Pylon::ComponentType_Confidence:
+            break;
+        case Pylon::ComponentType_Undefined:
+        case Pylon::ComponentType_Reflectance:
+        case Pylon::ComponentType_Scatter:
+        case Pylon::ComponentType_IntensityCombined_STA:
+        case Pylon::ComponentType_Error_STA:
+        case Pylon::ComponentType_RawCombined_STA:
+        case Pylon::ComponentType_Calibration_STA:
+            qDebug() << "This is not an implemented format. Index:" << i;
+            break;
+        }
+    }
     auto cloud = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
-    cloud->width = width;
-    cloud->height = height;
     cloud->is_dense = false;
-    cloud->points.resize(width * height);
 
-    const auto* pSrcPoint = reinterpret_cast<const Point*>(rangeComponent.GetData());
-    const auto* pIntensity = reinterpret_cast<const uint16_t*>(intensityComponent.GetData());
+    if(intensity_comp < 0) return cloud;
+
+    const auto intensity = container.GetDataComponent(intensity_comp);
+    if(disparity_comp >=0){
+        // STA
+        const auto disparity = container.GetDataComponent(disparity_comp);
+        cloud->width = disparity.GetWidth();
+        cloud->height = disparity.GetHeight();
+        cloud->points.resize(cloud->width * cloud->height);
+
+        const uint16_t* disparityPoint = static_cast<const uint16_t*>(disparity.GetData());
+        const uint8_t* intensityPoint = static_cast<const uint8_t*>(intensity.GetData());
+        int intensityChannels = (intensity.GetPixelType() == Pylon::PixelType_RGB8packed) ? 3 : 1;
+
+        double scale_x = static_cast<double>(intensity.GetWidth()) / cloud->width;
+        double scale_y = static_cast<double>(intensity.GetHeight()) / cloud->height;
+
+        double coordinate_scale = currentInstantCamera.Scan3dCoordinateScale.GetValue();
+        double coordinate_offset = currentInstantCamera.Scan3dCoordinateOffset.GetValue();
+        double baseline = currentInstantCamera.Scan3dBaseline.GetValue();
+        double focal_length = currentInstantCamera.Scan3dFocalLength.GetValue();
+        double cx = currentInstantCamera.Scan3dPrincipalPointU.GetValue();
+        double cy = currentInstantCamera.Scan3dPrincipalPointV.GetValue();
 
 #pragma omp parallel for
-    for (uint32_t i = 0; i < width * height; ++i) {
-        auto& pt = cloud->points[i];
-        const auto& src = pSrcPoint[i];
+        for (int idx = 0; idx < cloud->width * cloud->height; ++idx) {
+            int u = idx % cloud->width;
+            int v = idx / cloud->width;
+            uint16_t disp_raw = disparityPoint[idx];
+            auto& pt = cloud->points[idx];
+            if (disp_raw == 0) {
+                pt.x = pt.y = pt.z = std::numeric_limits<float>::quiet_NaN();
+                pt.r = pt.g = pt.b = 0;
+                continue;
+            }
+            float d = disp_raw * coordinate_scale + coordinate_offset;
+            float z = 1000.0f * baseline * focal_length / d;
+            pt.x = (u - cx) * z / focal_length;
+            pt.y = (v - cy) * z / focal_length;
+            pt.z = z;
+            int iu = std::min(static_cast<int>(u * scale_x), (static_cast<int>(intensity.GetWidth()) - 1));
+            int iv = std::min(static_cast<int>(v * scale_y), (static_cast<int>(intensity.GetHeight()) - 1));
+            int int_idx = (iv * intensity.GetWidth() + iu) * intensityChannels;
+            if (intensityChannels == 1) {
+                pt.r = pt.g = pt.b = intensityPoint[int_idx];
+            } else {
+                pt.r = intensityPoint[int_idx + 0];
+                pt.g = intensityPoint[int_idx + 1];
+                pt.b = intensityPoint[int_idx + 2];
+            }
+        }
+        return cloud;
+    }else if(range_comp >=0){
+        // Blaze
+        const auto range = container.GetDataComponent(range_comp);
+        cloud->width = range.GetWidth();
+        cloud->height = range.GetHeight();
+        cloud->points.resize(cloud->width * cloud->height);
+        const auto* pSrcPoint = reinterpret_cast<const Point*>(range.GetData());
+        const auto* pIntensity = reinterpret_cast<const uint16_t*>(intensity.GetData());
 
-        pt.x = src.x;
-        pt.y = src.y;
-        pt.z = src.z;
+#pragma omp parallel for
+        for (uint32_t i = 0; i < cloud->width * cloud->height; ++i) {
+            auto& pt = cloud->points[i];
+            const auto& src = pSrcPoint[i];
 
-        pt.r = pt.g = pt.b = (uint8_t)(pIntensity[i] >>8);
+            pt.x = src.x;
+            pt.y = src.y;
+            pt.z = src.z;
+
+            pt.r = pt.g = pt.b = (uint8_t)(pIntensity[i] >>8);
+        }
     }
-
     return cloud;
 }
 
