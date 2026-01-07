@@ -327,7 +327,6 @@ void Qylon::Camera::OnImageGrabbed(Pylon::CInstantCamera &camera, const Pylon::C
             } catch (const Pylon::GenericException &e) {
                 Qylon::log("[ERROR WHILE MAKING GRABBED IMAGE]");
             }
-#endif
         }else if(model.contains("STA")){
             try{
                 pcPtr = convertGrabResultToPointCloud(grabResult);
@@ -335,6 +334,7 @@ void Qylon::Camera::OnImageGrabbed(Pylon::CInstantCamera &camera, const Pylon::C
             }catch(const Pylon::GenericException &e){
                 Qylon::log("[ERROR WHILE MAKING GRABBED IMAGE]");
             }
+#endif
         }else {  // Handle 2D cameras
             try {
                 Pylon::CPylonImage image;
