@@ -31,7 +31,7 @@ public:
     };
     vTools(Qylon *parentQylon=nullptr);
     ~vTools();
-    bool loadRecipe(QString path);
+    bool loadRecipe(QString path, bool preAllocateResources=true);
     void startRecipe(int count=-1);
     void stopRecipe();
     QString getCurrentRecipePath(){ return currentRecipePath; }

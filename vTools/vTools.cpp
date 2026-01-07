@@ -15,14 +15,14 @@ Qylon::vTools::~vTools()
     // delete widget;
 }
 
-bool Qylon::vTools::loadRecipe(QString path)
+bool Qylon::vTools::loadRecipe(QString path, bool preAllocateResources)
 {
     try{
         currentRecipe.DeallocateResources();
         currentRecipe.Unload();
 
         currentRecipe.Load(path.toStdString().c_str());
-        currentRecipe.PreAllocateResources();
+        if(preAllocateResources) currentRecipe.PreAllocateResources();
         currentRecipe.RegisterAllOutputsObserver(this, Pylon::RegistrationMode_ReplaceAll);
         currentRecipePath = path;
 
