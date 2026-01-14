@@ -26,6 +26,20 @@ bool Qylon::vTools::loadRecipe(QString path, bool preAllocateResources)
         currentRecipe.RegisterAllOutputsObserver(this, Pylon::RegistrationMode_ReplaceAll);
         currentRecipePath = path;
 
+        // auto list = currentRecipe.GetParameters().GetAllParameterNames();
+        // for(const auto &a: list){
+        //     try{
+        //         auto param = currentRecipe.GetParameters().Get(a);
+        //         if(param.IsReadable()){
+        //             qDebug() << a << "=" << param.ToString();
+        //         }else{
+        //             qDebug() << a << "=" << "Not readable";
+        //         }
+        //     }catch(const Pylon::GenericException &e){
+        //         qDebug() << "Cannot get the information about" << a << e.GetDescription();
+        //     }
+        // }
+
         // if(widget) delete widget;
         // widget = new vToolsWidget(this);
         // widget->loadRecipeConfiguration(&currentRecipe);
@@ -58,9 +72,6 @@ void Qylon::vTools::stopRecipe()
         requestInterruption();
         _waitObject.Reset();
 
-        currentRecipe.Stop();
-        currentRecipe.DeallocateResources();
-
         wait();
 
         Qylon::log("Recipe stopped.");
@@ -84,6 +95,7 @@ void Qylon::vTools::run()
             Qylon::log("Error occurred...");
         }
     }
+    currentRecipe.Stop();
 }
 
 void Qylon::vTools::OutputDataPush(Pylon::DataProcessing::CRecipe &recipe, Pylon::DataProcessing::CVariantContainer valueContainer, const Pylon::DataProcessing::CUpdate &update, intptr_t userProvidedId)
