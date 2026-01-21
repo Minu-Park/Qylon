@@ -82,20 +82,25 @@ void Qylon::vTools::stopRecipe()
 
 void Qylon::vTools::run()
 {
-    currentRecipe.Start();
-    while(!isInterruptionRequested() && (counter != 0)){
-        if(!currentRecipe.IsStarted()){
-            return;
+    try{
+        currentRecipe.Start();
+        while(!isInterruptionRequested() && (counter != 0)){
+            if(!currentRecipe.IsStarted()){
+                return;
+            }
+            if (counter > 0) --counter;
+            if(getWaitObject().Wait(1000)){
+                _waitObject.Reset();
+                emit finishedProcessing();
+            }else{
+                Qylon::log("Error occurred...");
+            }
         }
-        if (counter > 0) --counter;
-        if(getWaitObject().Wait(1000)){
-            _waitObject.Reset();
-            emit finishedProcessing();
-        }else{
-            Qylon::log("Error occurred...");
-        }
+        currentRecipe.Stop();
+    }catch(const Pylon::GenericException &e){
+        currentRecipe.Stop();
+        Qylon::log(e.GetDescription());
     }
-    currentRecipe.Stop();
 }
 
 void Qylon::vTools::OutputDataPush(Pylon::DataProcessing::CRecipe &recipe, Pylon::DataProcessing::CVariantContainer valueContainer, const Pylon::DataProcessing::CUpdate &update, intptr_t userProvidedId)
@@ -558,3 +563,133 @@ Qylon::vTools::Result Qylon::vTools::getResult(){
 
 #endif
 
+/*
+ *
+void MainWindow::builderRecipe()
+{
+    Pylon::DataProcessing::CBuildersRecipe recipe;
+    recipe.AddOutput("Image", Pylon::DataProcessing::VariantDataType_PylonImage);
+    recipe.AddVTool("Camera", "846BCA11-6BF2-4895-88C4-FE038F5A659C");
+    recipe.AddConnection("camera_to_output",
+                         "Camera.Image",
+                         "<RecipeOutput>.Image");
+
+
+    int circleMeasurementCount = MEASUREMENTS_COUNT;
+    for(int i=1; i<=circleMeasurementCount; ++i ){
+        QString name = "CircleMeasurementsPro" + QString::number(i);
+        recipe.AddVTool(name.toStdString().c_str(), "4AD86113-A1A6-46A1-BC88-E5C8DB6782EA");
+
+        recipe.AddConnection(QString("camera_to_circle_" + QString::number(i)).toStdString().c_str(),
+                             "Camera.Image",
+                             QString(name + ".Image").toStdString().c_str());
+
+        recipe.AddOutput(QString("Circle_px"+ QString::number(i)).toStdString().c_str(),
+                         Pylon::DataProcessing::VariantDataType_CircleF);
+        recipe.AddConnection(QString("circle_" + QString::number(i) + "_to_output").toStdString().c_str(),
+                             (name + ".Circle_px").toStdString().c_str(),
+                             QString("<RecipeOutput>.Circle_px" + QString::number(i)).toStdString().c_str());
+
+        recipe.AddOutput(QString("Score" + QString::number(i)).toStdString().c_str(),
+                         Pylon::DataProcessing::VariantDataType_Float);
+        recipe.AddConnection(QString("Score_" + QString::number(i) + "_to_output").toStdString().c_str(),
+                             (name + ".Score").toStdString().c_str(),
+                             QString("<RecipeOutput>.Score" + QString::number(i)).toStdString().c_str());
+
+        auto recipeName = name + "/@vTool/";
+        auto val = recipe.GetParameters().Get(IntegerParameterName((recipeName + "Column").toStdString().c_str()));
+
+        recipe.GetParameters().GetAllParameterNames();
+        qDebug() << val.GetValue();
+    }
+    recipe.Start(EAcquisitionMode::AcquisitionMode_SingleFrame);
+    recipe.Stop();
+
+    recipe.SaveAs(ERecipeFileFormat::RecipeFileFormat_JsonDefault, "C:/Users/minwoo/Downloads/test.precipe");
+    vTools->loadRecipe("C:/Users/minwoo/Downloads/test.precipe");
+}
+
+void MainWindow::checkRecipe()
+{
+    // int circleMeasurementCount = 23;
+    // int sampleSegmentValue = 500;
+    // double sampleSegmentWidthValue = 4.1;
+    // double sampleToleValue = 5.0;
+    // int shapeTolValue = 150;
+
+    // auto newRecipe = vTools->getRecipe();
+    // for(int i=1; i<=circleMeasurementCount; ++i){
+    //     QString name = "CircleMeasurementsPro" + QString::number(i);
+    //     auto recipeName = name + "/@vTool/";
+
+    //     try{
+    //         auto col = newRecipe->GetParameters().Get(IntegerParameterName((recipeName + "Column").toStdString().c_str()));
+    //         auto row = newRecipe->GetParameters().Get(IntegerParameterName((recipeName + "Row").toStdString().c_str()));
+    //         // The length from outer to inner circle
+    //         auto shapeTor = newRecipe->GetParameters().Get(FloatParameterName((recipeName + "ShapeTolerance").toStdString().c_str()));
+
+    //         auto sample = newRecipe->GetParameters().Get(IntegerParameterName((recipeName + "NumberSampleSegments").toStdString().c_str()));
+    //         auto sampleWidth = newRecipe->GetParameters().Get(FloatParameterName((recipeName + "SampleSegmentWidth").toStdString().c_str()));
+    //         auto sampleTor = newRecipe->GetParameters().Get(FloatParameterName((recipeName + "SampleTolerance").toStdString().c_str()));
+    //         qDebug() << name
+    //                  <<"\nShape Tole:" << shapeTor.GetValue()
+    //                  << "\nSampleSegments:" << sample.GetValue()
+    //                  << "\nSampleWidth:" << sampleWidth.GetValue()
+    //                  << "\nSampleTor:" << sampleTor.GetValue() ;
+    //         qDebug() << "Edited:" << sample.TrySetValue(sampleSegmentValue) << sampleWidth.TrySetValue(sampleSegmentWidthValue)
+    //                  << sampleTor.TrySetValue(sampleToleValue) << shapeTor.TrySetValue(shapeTolValue);
+    //         qDebug() << "\n\n";
+
+    //     }catch(const GenericException &e){ qDebug()<< e.what();}
+    // }
+
+    try{
+        auto recipe = vTools->getRecipe();
+        auto params = recipe->GetParameters().GetAllParameterNames();
+
+        for(auto par: params){
+            auto var = recipe->GetParameters().Get(par);
+            if(var.IsValid()){
+                auto str1 = var.GetInfo(EParameterInfo::ParameterInfo_Name);
+                auto str2 = var.GetInfo(EParameterInfo::ParameterInfo_DisplayName);
+                auto str3 = var.GetInfo(EParameterInfo::ParameterInfo_ToolTip);
+
+                qDebug() << str1 << "|" << str2 <<  "\n" << str3;
+            }
+        }
+    }catch(const GenericException &e){
+        qDebug()<< e.what();
+    }
+}*/
+
+/*
+ *
+                // auto list = currentRecipe->GetParameters().GetAllParameterNames();
+                // for(const auto &a: list){
+                //     try{
+                //         auto param = currentRecipe->GetParameters().Get(a);
+                //         if(param.IsReadable()){
+                //             QString interfaceType;
+                //             switch(param.GetNode()->GetPrincipalInterfaceType()){
+                //             case GenApi_3_1_Basler_pylon_v3::intfIValue: interfaceType="Value"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIBase:interfaceType="Base"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIInteger:interfaceType="Integer"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIBoolean:interfaceType="Boolean"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfICommand:interfaceType="Command"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIFloat:interfaceType="Float"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIString:interfaceType="String"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIRegister:interfaceType="Register"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfICategory:interfaceType="Category"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIEnumeration:interfaceType="Enumeration"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIEnumEntry:interfaceType="EnumEntry"; break;
+                //             case GenApi_3_1_Basler_pylon_v3::intfIPort:interfaceType="Port"; break;
+                //             }
+                //             qDebug() << a << "=" << param.ToString() << QString("[%1]").arg(interfaceType);
+                //         }else{
+                //             qDebug() << a << "=" << "Not readable";
+                //         }
+                //     }catch(const Pylon::GenericException &e){
+                //         qDebug() << "Cannot get the information about" << a << e.GetDescription();
+                //     }
+                // }
+*/
